@@ -38,5 +38,33 @@ class Accionista extends Model
     {
         return $this->belongsTo(Accionista::class, 'id_padre');
     }
-}
+    public function esPersonaNatural()
+    {
+        return $this->tipoPersona->nombre === 'Natural';
+    }
 
+    public function esPersonaJuridica()
+    {
+        return $this->tipoPersona->nombre === 'Jurídica';
+    }
+
+    public function tieneSoloPersonasNaturales()
+    {
+        return $this->accionistasHijos()->count() > 0 && $this->accionistasHijos()->whereHas('tipoPersona', function ($query) {
+            $query->where('nombre', 'Jurídica');
+        })->count() === 0;
+    }
+
+    public static function validarComposicionAccionaria($id_empresa)
+    {
+        $empresa = Empresa::find($id_empresa);
+        $accionistas = $empresa->accionistas()->get();
+
+        foreach ($accionistas as $accionista) {
+            if ($accionista->esPersonaJuridica() && !$accionista->tieneSoloPersonasNaturales()) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
