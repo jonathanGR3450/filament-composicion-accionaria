@@ -40,18 +40,18 @@ class Accionista extends Model
     }
     public function esPersonaNatural()
     {
-        return $this->tipoPersona->nombre === 'Natural';
+        return $this->tipoPersona->nombre === 'natural';
     }
 
     public function esPersonaJuridica()
     {
-        return $this->tipoPersona->nombre === 'Jurídica';
+        return $this->tipoPersona->nombre === 'juridica';
     }
 
     public function tieneSoloPersonasNaturales()
     {
         return $this->accionistasHijos()->count() > 0 && $this->accionistasHijos()->whereHas('tipoPersona', function ($query) {
-            $query->where('nombre', 'Jurídica');
+            $query->where('nombre', 'juridica');
         })->count() === 0;
     }
 

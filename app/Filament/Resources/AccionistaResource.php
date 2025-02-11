@@ -3,12 +3,16 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\AccionistaResource\Pages;
 use App\Models\Accionista;
+use App\Models\Empresa;
+use App\Models\TipoPersona;
 use Filament\Forms;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Mail;
 
 class AccionistaResource extends Resource
@@ -41,13 +45,15 @@ class AccionistaResource extends Resource
 
                 Select::make('id_padre')
                     ->label('Accionista Padre')
-                    ->relationship('accionistaPadre', 'nombre')
+                    ->options(function () {
+                        return Accionista::where('tipo_persona_id', TipoPersona::TIPO_PERSONA_JURIDICA) // Solo personas jurídicas
+                            ->where('empresa_id', Auth::user()->empresa_id) // De la misma empresa del usuario
+                            ->pluck('nombre', 'id');
+                    })
                     ->nullable(),
 
-                Select::make('empresa_id')
-                    ->label('Empresa')
-                    ->relationship('empresa', 'razon_social')
-                    ->required(),
+                Hidden::make('empresa_id')
+                    ->default(fn () => Auth::user()->empresa_id),
 
                 Select::make('estado')
                     ->label('Estado')
@@ -63,11 +69,11 @@ class AccionistaResource extends Resource
     {
         return $table
             ->columns([
-                TextColumn::make('nombre')->label('Nombre'),
+                TextColumn::make('nombre')->label('Nombre / Razón Social')->sortable(),
                 TextColumn::make('tipoPersona.nombre')->label('Tipo de Persona'),
                 TextColumn::make('numero_identificacion')->label('Identificación'),
                 TextColumn::make('participacion_accionaria')->label('Participación %'),
-                TextColumn::make('empresa.nombre')->label('Empresa'),
+                // TextColumn::make('empresa.razon_social')->label('Empresa'),
                 TextColumn::make('accionistaPadre.nombre')->label('Accionista Padre')->sortable(),
                 TextColumn::make('estado')->label('Estado')->badge()
                     ->formatStateUsing(fn($state) => $state ? 'Activo' : 'Inactivo')
@@ -80,35 +86,72 @@ class AccionistaResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
+            ])
+            ->headerActions([
                 Tables\Actions\Action::make('enviar_correo')
                     ->label('Enviar Confirmación')
-                    ->icon('heroicon-o-mail')
-                    ->visible(fn ($record) => self::validarComposicionAccionaria($record->id_empresa))
-                    ->action(fn ($record) => self::enviarCorreoConfirmacion($record))
+                    ->icon('heroicon-o-envelope')
+                    ->visible(fn () => self::validarComposicionAccionaria(Auth::user()->empresa_id))
+                    ->action(fn () => self::enviarCorreoConfirmacion(Auth::user()->empresa_id))
             ])
             ->bulkActions([
                 Tables\Actions\DeleteBulkAction::make(),
             ]);
     }
 
-    public static function validarComposicionAccionaria($id_empresa)
+    public static function validarComposicionAccionaria($empresa_id)
     {
-        $empresa = \App\Models\Empresa::find($id_empresa);
+        $empresa = Empresa::find($empresa_id);
+
         if (!$empresa) return false;
 
-        $accionistas = $empresa->accionistas()->get();
+        $accionistas = $empresa->accionistas()->whereNull('id_padre')->get();
+
+        if (self::validarEstructuraAccionaria($accionistas)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+    * Función recursiva para validar la estructura accionaria
+    */
+    private static function validarEstructuraAccionaria($accionistas, $nivel = 1)
+    {
+        $totalParticipacion = 0;
+        // echo "Nivel: " . $nivel . "\n";
+        // echo "<pre>";
+        // print_r($accionistas->toArray());
+        // echo "</pre>";
 
         foreach ($accionistas as $accionista) {
-            if ($accionista->esPersonaJuridica() && !$accionista->tieneSoloPersonasNaturales()) {
-                return false;
+            $totalParticipacion += $accionista->participacion_accionaria;
+
+            if ($accionista->esPersonaJuridica()) {
+                $subAccionistas = $accionista->accionistasHijos()->get();
+
+                if ($subAccionistas->isEmpty()) {
+                    return false; // Tiene una persona jurídica sin estructura detallada
+                }
+
+                // Validar recursivamente la composición accionaria de la persona jurídica
+                if (!self::validarEstructuraAccionaria($subAccionistas, $nivel + 1)) {
+                    return false;
+                }
             }
         }
-        return true;
+
+        // La sumatoria de la participación debe ser 100%
+        return round($totalParticipacion, 2) === 100.00;
     }
+
 
     public static function enviarCorreoConfirmacion($record)
     {
-        Mail::raw('Hello World!', function($msg) {$msg->to('jonathan.garzon@realtechltda.com')->subject('Test Email'); });
+        Mail::raw('Hello World!', function($msg) {
+            $msg->to('jonathan.garzon@realtechltda.com')->subject('Test Email');
+        });
     }
 
     public static function getRelations(): array
@@ -123,6 +166,11 @@ class AccionistaResource extends Resource
             'create' => Pages\CreateAccionista::route('/create'),
             'edit' => Pages\EditAccionista::route('/{record}/edit'),
         ];
+    }
+
+    public static function canCreate(): bool
+    {
+        return Auth::user() !== null;
     }
 }
 
